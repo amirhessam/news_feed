@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Weekly AI paper digest. Reads new arXiv papers and publishes one RSS item.
+
+# Each parameter can be set at deploy time. `sam deploy --guided` saves the
+# chosen values in samconfig.toml under parameter_overrides.
+Parameters:
+  ScheduleExpression:
+    Type: String
+    Default: "cron(0 6 ? * MON *)"
+    Description: EventBridge schedule for the weekly job. Default is Monday 06:00 UTC.
+  BedrockModelId:
+    Type: String
+    Default: "amazon.nova-lite-v1:0"
+    Description: Bedrock model that scores every paper and writes the digest. A model id or cross-region inference profile, such as us.amazon.nova-lite-v1:0.
+  RankModelId:
+    Type: String
+    Default: "amazon.nova-pro-v1:0"
+    Description: Bedrock model that picks the digest papers from the full-text shortlist. Use the BedrockModelId value to rank with that model instead.
+  Categories:
+    Type: String
+    Default: "cs.AI,cs.LG,cs.CL,cs.CV,stat.ML"
+    Description: Comma-separated arXiv categories.
+  ShortlistSize:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 40
+    Description: How many papers to download and read with Comprehend.
+  DigestSize:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 10
+    Description: How many papers to include in the weekly digest.
+  MaxCharsPerPaper:
+    Type: Number
+    Default: 20000
+    MinValue: 1000
+    MaxValue: 40000
+    Description: Maximum extracted characters sent to Comprehend per paper.
+  ContactEmail:
+    Type: String
+    Default: "anonymous@example.com"
+    Description: Contact address sent in the arXiv User-Agent.
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Email for failed runs and unusual feed traffic. Leave empty to skip alerts.
+  LookbackDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 14
+    Description: Length of the submission window each run covers.
+  AnnouncementLagDays:
+    Type: Number
+    Default: 3
+    MinValue: 0
+    MaxValue: 7
+    Description: Days between the end of the window and the run, so arXiv has announced every paper in it.
+  PdfDelaySeconds:
+    Type: Number
+    Default: 3
+    MinValue: 0
+    MaxValue: 10
+    Description: Pause between arXiv API and PDF requests.
+  MaxPapers:
+    Type: Number
+    Default: 5000
+    MinValue: 50
+    MaxValue: 10000
+    Description: Metadata cap for one window before the shortlist step. The default categories had about 3,100 papers a week in October 2026.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+# Shared by both functions. arm64 costs less per second than x86_64.
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  # Private bucket for feed.xml and the run state. Readers never reach it
+  # directly. ServeFeed reads feed.xml and returns it.
+  FeedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # tmp/feed.xml is only a staging copy of the next feed.
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireTempFeed
+            Status: Enabled
+            Prefix: tmp/
+            ExpirationInDays: 1
+
+  # The weekly job. 900 seconds is the Lambda maximum, and the handler
+  # budgets its stages to publish inside it. Lambda gives more CPU to more
+  # memory, and 1024 MB keeps PDF extraction fast.
+  PublishDigest:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src
+      Handler: handler.publish_digest
+      Description: Fetch arXiv papers, score them, and append the weekly RSS digest.
+      Timeout: 900
+      MemorySize: 1024
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref FeedBucket
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          RANK_MODEL_ID: !Ref RankModelId
+          CATEGORIES: !Ref Categories
+          SHORTLIST_SIZE: !Sub "${ShortlistSize}"
+          DIGEST_SIZE: !Sub "${DigestSize}"
+          MAX_CHARS_PER_PAPER: !Sub "${MaxCharsPerPaper}"
+          CONTACT_EMAIL: !Ref ContactEmail
+          LOOKBACK_DAYS: !Sub "${LookbackDays}"
+          ANNOUNCE_LAG_DAYS: !Sub "${AnnouncementLagDays}"
+          PDF_DELAY_SECONDS: !Sub "${PdfDelaySeconds}"
+          MAX_PAPERS: !Sub "${MaxPapers}"
+          FEED_TITLE: AI Paper News
+          FEED_PUBLIC_URL: !GetAtt ServeFeedUrl.FunctionUrl
+      Policies:
+        - Statement:
+            # Without ListBucket, S3 answers a missing key with 403 instead of 404.
+            - Sid: ListFeedBucket
+              Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt FeedBucket.Arn
+            - Sid: WriteFeedState
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+                - s3:DeleteObject
+              Resource:
+                - !Sub "${FeedBucket.Arn}/feed.xml"
+                - !Sub "${FeedBucket.Arn}/tmp/*"
+                - !Sub "${FeedBucket.Arn}/state/*"
+                - !Sub "${FeedBucket.Arn}/runs/*"
+            # These Comprehend actions do not support resource-level permissions.
+            - Sid: ScorePaperText
+              Effect: Allow
+              Action:
+                - comprehend:DetectSentiment
+                - comprehend:DetectKeyPhrases
+              Resource: "*"
+            # Any model, so BedrockModelId and RankModelId can change, including
+            # to cross-region inference profiles, without a policy change.
+            - Sid: InvokeDigestModel
+              Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+      # Lambda retries a failed scheduled run twice, waiting 1 minute before
+      # the first retry and 2 minutes before the second.
+      Events:
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleExpression
+            Description: Publish the weekly AI paper digest
+            Enabled: true
+
+  # Serves the feed at a public function URL. RSS readers cannot sign
+  # requests, so the URL has no auth. The function can only read feed.xml.
+  ServeFeed:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src
+      Handler: handler.serve_feed
+      Description: Return the RSS feed and the HTML page for each week.
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref FeedBucket
+          FEED_TITLE: AI Paper News
+      Policies:
+        - Statement:
+            # Without ListBucket, S3 answers a missing key with 403 instead of 404.
+            - Sid: ListFeedBucket
+              Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt FeedBucket.Arn
+            - Sid: ReadFeedXml
+              Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${FeedBucket.Arn}/feed.xml"
+      FunctionUrlConfig:
+        AuthType: NONE
+
+  # The topic and both alarms exist only when AlertEmail is set.
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  PublishDigestErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmDescription: A weekly digest attempt failed or timed out. Lambda retries twice; check the PublishDigest logs.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PublishDigest
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # Every request to the public URL is a billed Lambda invocation, so a flood
+  # of requests should be noticed.
+  FeedTrafficAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmDescription: The public feed URL served more than 5,000 requests in one hour.
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ServeFeed
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 5000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+Outputs:
+  FeedUrl:
+    Description: Public RSS subscribe URL
+    Value: !GetAtt ServeFeedUrl.FunctionUrl
+  PublishDigestFunctionName:
+    Description: Lambda that runs the weekly job
+    Value: !Ref PublishDigest
+  BucketName:
+    Description: Private bucket holding feed.xml and run state
+    Value: !Ref FeedBucket

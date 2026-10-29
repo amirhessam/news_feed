@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2510.12345v2</id>
+    <title>  A New Result
+for Models </title>
+    <summary>We show a measurable gain
+on a public benchmark.</summary>
+    <published>2026-10-26T00:00:00Z</published>
+    <arxiv:primary_category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <author><name>Ada Lovelace</name></author>
+    <author><name>Alan Turing</name></author>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+    <link href="https://arxiv.org/abs/2510.12345v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2510.12345v2" rel="related" type="application/pdf" title="pdf"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/not-a-paper</id>
+    <title>Missing date</title>
+    <summary>This entry is skipped.</summary>
+  </entry>
+</feed>

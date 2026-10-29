@@ -1,0 +1,143 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudFormationStacks",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateChangeSet",
+        "cloudformation:CreateStack",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResource",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:DescribeStacks",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:GetTemplate",
+        "cloudformation:ListChangeSets",
+        "cloudformation:ListStackResources",
+        "cloudformation:TagResource",
+        "cloudformation:UntagResource",
+        "cloudformation:UpdateStack"
+      ],
+      "Resource": [
+        "arn:aws:cloudformation:us-east-1:YOUR_ACCOUNT_ID:stack/ai-paper-news/*",
+        "arn:aws:cloudformation:us-east-1:YOUR_ACCOUNT_ID:stack/aws-sam-cli-managed-default/*",
+        "arn:aws:cloudformation:us-east-1:YOUR_ACCOUNT_ID:changeSet/*"
+      ]
+    },
+    {
+      "Sid": "SamTransform",
+      "Effect": "Allow",
+      "Action": "cloudformation:CreateChangeSet",
+      "Resource": "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
+    },
+    {
+      "Sid": "ReadOnlyLookups",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:ListStacks",
+        "cloudformation:ValidateTemplate",
+        "cloudwatch:DescribeAlarms",
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SamArtifactAndFeedBuckets",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*",
+        "arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*/*",
+        "arn:aws:s3:::ai-paper-news-*",
+        "arn:aws:s3:::ai-paper-news-*/*"
+      ]
+    },
+    {
+      "Sid": "StackFunctions",
+      "Effect": "Allow",
+      "Action": "lambda:*",
+      "Resource": "arn:aws:lambda:us-east-1:YOUR_ACCOUNT_ID:function:ai-paper-news-*"
+    },
+    {
+      "Sid": "WeeklySchedule",
+      "Effect": "Allow",
+      "Action": "events:*",
+      "Resource": "arn:aws:events:us-east-1:YOUR_ACCOUNT_ID:rule/ai-paper-news-*"
+    },
+    {
+      "Sid": "AlertTopic",
+      "Effect": "Allow",
+      "Action": "sns:*",
+      "Resource": [
+        "arn:aws:sns:us-east-1:YOUR_ACCOUNT_ID:ai-paper-news-*",
+        "arn:aws:sns:us-east-1:YOUR_ACCOUNT_ID:ai-paper-news-*:*"
+      ]
+    },
+    {
+      "Sid": "AlertAlarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:us-east-1:YOUR_ACCOUNT_ID:alarm:ai-paper-news-*"
+    },
+    {
+      "Sid": "RolesForTheTwoFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:ListRolePolicies",
+        "iam:ListRoleTags",
+        "iam:PutRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription"
+      ],
+      "Resource": "arn:aws:iam::YOUR_ACCOUNT_ID:role/ai-paper-news-*"
+    },
+    {
+      "Sid": "PassRolesOnlyToLambda",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::YOUR_ACCOUNT_ID:role/ai-paper-news-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "lambda.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ReadFunctionLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogStreams",
+        "logs:FilterLogEvents",
+        "logs:GetLogEvents",
+        "logs:StartLiveTail"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-east-1:YOUR_ACCOUNT_ID:log-group:/aws/lambda/ai-paper-news-*",
+        "arn:aws:logs:us-east-1:YOUR_ACCOUNT_ID:log-group:/aws/lambda/ai-paper-news-*:*"
+      ]
+    }
+  ]
+}

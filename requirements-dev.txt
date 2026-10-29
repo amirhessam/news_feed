@@ -1,0 +1,6 @@
+-r src/requirements.txt
+pytest>=8.0.0
+boto3>=1.35.0
+pyyaml>=6.0
+cfn-lint>=1.0
+aws-sam-translator>=1.90.0
