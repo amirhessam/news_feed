@@ -12,6 +12,7 @@ so that details from one paper cannot end up in another paper's summary.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
@@ -124,7 +125,7 @@ def select_shortlist(
         return list(papers)
     stop = should_stop or (lambda: False)
     # Seeded with the week, so a rerun of the week shows the same orders.
-    rng = random.Random(seed)
+    rng = _rng(seed)
     passes = [_shuffled(papers, rng) for _ in range(SCORING_PASSES)]
     batches = [
         order[start : start + SHORTLIST_BATCH] for order in passes for start in range(0, len(order), SHORTLIST_BATCH)
@@ -174,7 +175,7 @@ def rank_papers(
     reasons: dict[str, str] = {}
     model_ok = False
     if use_model:
-        rng = random.Random(seed)
+        rng = _rng(seed)
         views = [_shuffled(papers, rng) for _ in range(RANK_PASSES)]
         passes = [
             result
@@ -267,6 +268,19 @@ def parse_json_object(text: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError("model JSON was not an object")
     return value
+
+
+def _rng(seed) -> random.Random:
+    """Return a generator whose sequence depends only on `seed`.
+
+    An ISO week is a string. It is reduced with SHA-256 here and passed as an
+    int, so the shuffle does not depend on how `random.Random` treats strings
+    or on the process hash salt. An int seed, such as the ones in the tests,
+    is used unchanged. `None` stays unseeded.
+    """
+    if isinstance(seed, str):
+        seed = int.from_bytes(hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big")
+    return random.Random(seed)
 
 
 def _shuffled(papers: list[Paper], rng: random.Random) -> list[Paper]:
