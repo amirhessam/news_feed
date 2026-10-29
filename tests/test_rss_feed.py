@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from bedrock_digest import Digest, DigestEntry
+import rss_feed
 from rss_feed import digest_item, empty_feed, find_item, parse_feed, render_item_page, upsert_item
 from tests.papers import make_paper
 
@@ -137,3 +138,40 @@ def test_find_item_by_guid_or_latest_and_render_a_page():
     page = render_item_page("AI Paper News", find_item(feed, "latest"))
     assert "<title>&lt;b&gt;2026-W44&lt;/b&gt;</title>" in page
     assert "<p>2026-W44 body</p>" in page
+
+
+def test_the_week_page_groups_papers_and_formats_the_date():
+    page = render_item_page(
+        "AI Paper News",
+        {
+            "title": "AI Research Weekly",
+            "pubDate": "Thu, 29 Oct 2026 15:59:51 +0000",
+            "description": (
+                "<p>The lead.</p>"
+                "<h2>1. First paper</h2><p>Ada Lovelace</p><p>cs.AI</p>"
+                "<p>Tone: mostly neutral.</p><p>A summary.</p>"
+                '<p><strong>Why it matters:</strong> It matters.</p>'
+                '<p><a href="https://arxiv.org/abs/1">arXiv abstract</a> · '
+                '<a href="https://arxiv.org/pdf/1">PDF</a></p>'
+                "<h2>2. Second paper</h2><p>Grace Hopper</p>"
+                "<p><small>Full text was unavailable; this summary is based on the abstract.</small></p>"
+            ),
+        },
+    )
+    assert page.count('<article class="paper">') == 2
+    assert '<span class="index">1</span>' in page
+    assert '<p class="links"><a href="https://arxiv.org/abs/1">' in page
+    assert " · " not in page
+    assert "October 29, 2026" in page
+    assert "Mon" not in page
+
+
+def test_the_week_page_month_does_not_follow_the_process_locale(monkeypatch):
+    months = list(rss_feed._MONTHS)
+    months[9] = "Octobre"
+    monkeypatch.setattr(rss_feed, "_MONTHS", tuple(months))
+    page = render_item_page(
+        "AI Paper News",
+        {"title": "Week", "pubDate": "Thu, 29 Oct 2026 15:59:51 +0000", "description": "<p>Body</p>"},
+    )
+    assert "Octobre 29, 2026" in page

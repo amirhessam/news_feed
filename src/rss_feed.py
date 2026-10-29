@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from email.utils import format_datetime
+from email.utils import format_datetime, parsedate_to_datetime
 from xml.sax.saxutils import escape
 
 from bedrock_digest import Digest
@@ -22,6 +22,21 @@ CHANNEL_DESCRIPTION = (
 )
 # One year of weekly items.
 KEEP_ITEMS = 52
+# English month names. strftime("%B") follows the process locale.
+_MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
 # XML 1.0 forbids these characters even when escaped. ElementTree writes them
 # as-is, and a single one makes feed.xml unreadable.
 _XML_INVALID = re.compile("[^\t\n\r\u0020-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
@@ -168,19 +183,23 @@ def render_item_page(feed_title: str, item: dict) -> str:
     """Render one stored digest as a standalone HTML page.
 
     The description is HTML this module generated, with every model and paper
-    value already escaped.
+    value already escaped. Papers are grouped from the stored headings, so a
+    digest published earlier still picks up this layout.
     """
     title = escape(xml_safe(item.get("title") or feed_title))
-    published = escape(xml_safe(item.get("pubDate") or ""))
+    name = escape(xml_safe(feed_title or "AI Paper News"))
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{title}</title>\n"
-        "<style>body{max-width:46rem;margin:2rem auto;padding:0 1rem;"
-        "font:16px/1.6 system-ui,sans-serif}</style>\n"
-        f"</head>\n<body>\n<h1>{title}</h1>\n<p><small>{published}</small></p>\n"
-        f"{xml_safe(item.get('description') or '')}\n</body>\n</html>\n"
+        f"<style>{_PAGE_STYLE}</style>\n"
+        "</head>\n<body>\n"
+        '<div class="page">\n'
+        f'<header><p class="mark">{name}</p><h1>{title}</h1>'
+        f"<p class=\"when\">{_pretty_when(item.get('pubDate') or '')}</p></header>\n"
+        f"<main>{_layout_digest(item.get('description') or '')}</main>\n"
+        "</div>\n</body>\n</html>\n"
     )
 
 
@@ -203,6 +222,163 @@ def render_feed(channel: dict, items: list[dict]) -> str:
     ET.indent(rss, space="  ")
     body = ET.tostring(rss, encoding="unicode")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + body + "\n"
+
+
+# The week page styles the description HTML already stored in the feed.
+# No images or web fonts: the page's content security policy blocks them.
+_PAGE_STYLE = """
+:root {
+  color-scheme: light;
+  --ink: #241c16;
+  --muted: #6f6256;
+  --line: #e4d8c8;
+  --paper: #fffdf9;
+  --field: #f3ecdf;
+  --teal: #0e5f5c;
+  --teal-soft: #e5f2f1;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(900px 420px at 0% -10%, #f8f1e4, transparent 55%),
+    var(--field);
+  color: var(--ink);
+  font: 17px/1.6 Georgia, "Iowan Old Style", Palatino, "Palatino Linotype", serif;
+}
+.page { max-width: 42rem; margin: 0 auto; padding: 2.75rem 1.25rem 4rem; }
+.mark {
+  margin: 0;
+  font: 600 0.72rem/1 system-ui, sans-serif;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+h1 {
+  margin: 0.45rem 0 0.2rem;
+  font-size: clamp(1.85rem, 4.2vw, 2.45rem);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+.when { margin: 0; color: var(--muted); font: 0.9rem/1.4 system-ui, sans-serif; }
+.intro > p:first-child { margin: 1.6rem 0 0.7rem; font-size: 1.18rem; line-height: 1.5; }
+.intro small, .intro em {
+  color: var(--muted);
+  font: 0.92rem/1.5 system-ui, sans-serif;
+}
+.intro em { font-style: normal; }
+.paper {
+  margin: 1.15rem 0;
+  padding: 1.2rem 1.25rem 1rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+.paper h2 {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin: 0 0 0.35rem;
+  font-size: 1.28rem;
+  text-wrap: balance;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+.index {
+  flex: none;
+  margin-top: 0.15rem;
+  min-width: 1.7rem;
+  height: 1.7rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: var(--teal-soft);
+  color: var(--teal);
+  font: 600 0.78rem/1.7rem system-ui, sans-serif;
+  text-align: center;
+}
+.paper h2 + p, .paper h2 + p + p {
+  margin: 0 0 0.15rem 2.45rem;
+  color: var(--muted);
+  font: 0.92rem/1.45 system-ui, sans-serif;
+}
+.paper h2 + p + p {
+  margin-bottom: 0.85rem;
+  font-size: 0.8rem;
+}
+.paper .tone {
+  margin: 0.4rem 0 0.8rem;
+  color: var(--muted);
+  font: 0.92rem/1.5 system-ui, sans-serif;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.paper .why {
+  margin: 1rem 0;
+  padding: 0.75rem 0.95rem;
+  background: #f4f8f7;
+  border-left: 3px solid var(--teal);
+  border-radius: 0 12px 12px 0;
+}
+.paper .why strong { font-family: system-ui, sans-serif; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--teal); }
+.paper .note { margin: 0.4rem 0; }
+.paper .note small { color: var(--muted); font: 0.85rem/1.45 system-ui, sans-serif; }
+.links { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0 0.15rem; }
+.links a {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.28rem 0.75rem;
+  color: var(--teal);
+  font: 600 0.84rem/1.4 system-ui, sans-serif;
+  text-decoration: none;
+}
+.links a:hover { background: var(--teal); color: #fff; border-color: var(--teal); }
+"""
+_PAPER_SPLIT = re.compile(r"(?=<h2\b)", re.IGNORECASE)
+_PAPER_NUMBER = re.compile(r"<h2>(\d+)\.\s*", re.IGNORECASE)
+
+
+def _layout_digest(description: str) -> str:
+    """Group each stored paper heading into its own article.
+
+    The feed keeps the description as ordinary HTML. This only changes the
+    page, including digests that were published before this layout.
+    """
+    html = xml_safe(description)
+    pieces = _PAPER_SPLIT.split(html)
+    if len(pieces) == 1:
+        return f'<div class="intro">{html}</div>'
+    intro, *papers = pieces
+    articles = "\n".join(f'<article class="paper">{_decorate_paper(paper)}</article>' for paper in papers)
+    return f'<div class="intro">{intro}</div>\n{articles}'
+
+
+def _decorate_paper(paper: str) -> str:
+    """Mark the parts of one paper so the page style can tell them apart."""
+    paper = _PAPER_NUMBER.sub(r'<h2><span class="index">\1</span> ', paper, count=1)
+    paper = paper.replace("<p>Tone:", '<p class="tone">Tone:', 1)
+    paper = paper.replace("<p><strong>Why it matters:</strong>", '<p class="why"><strong>Why it matters:</strong>', 1)
+    paper = paper.replace(
+        "<p><small>Full text was unavailable",
+        '<p class="note"><small>Full text was unavailable',
+        1,
+    )
+    paper = paper.replace('<p><a href="', '<p class="links"><a href="', 1)
+    return paper.replace("</a> · <a ", "</a><a ")
+
+
+def _pretty_when(value: str) -> str:
+    """Return a publication date as 'October 29, 2026', or the original text."""
+    text = xml_safe(value)
+    try:
+        parsed = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError):
+        parsed = None
+    if parsed is None:
+        return escape(text)
+    return escape(f"{_MONTHS[parsed.month - 1]} {parsed.day}, {parsed.year}")
 
 
 def _attr(value: str) -> str:

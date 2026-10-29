@@ -25,26 +25,10 @@ from arxiv_client import download_pdf, fetch_recent_papers
 from bedrock_digest import rank_papers, select_shortlist, write_digest
 from comprehend_score import score_text
 from pdf_text import extract_text, select_sections
-from rss_feed import digest_item, empty_feed, find_item, render_item_page, upsert_item
+from rss_feed import _MONTHS, digest_item, empty_feed, find_item, render_item_page, upsert_item
 from storage import FeedStore, LostWeekLock, iso_week_key
 
 logger = logging.getLogger(__name__)
-
-# English month names regardless of the runtime locale, which strftime would use.
-_MONTHS = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-)
 
 # Seconds that must remain in the run before each stage starts, and before each
 # summary is written. Below these, the run falls back to abstracts and
