@@ -142,6 +142,9 @@ Resources:
               Action:
                 - s3:ListBucket
               Resource: !GetAtt FeedBucket.Arn
+            # put_feed and backup_feed copy an object onto another key. CopyObject
+            # is allowed by s3:GetObject on the source and s3:PutObject on the
+            # destination. S3 has no s3:CopyObject action.
             - Sid: WriteFeedState
               Effect: Allow
               Action:

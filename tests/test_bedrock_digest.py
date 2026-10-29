@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -174,6 +175,14 @@ def test_scoring_calls_run_in_parallel(monkeypatch):
     assert client.peak > 1
     assert chosen[0].base_id == "2510.00123"
     assert len(client.calls) == 4 * SCORING_PASSES + SCORING_PASSES
+
+
+def test_a_week_string_seeds_from_sha256_not_the_process_hash():
+    digest = hashlib.sha256(b"2026-W44").digest()[:8]
+    seeded = bedrock_digest._rng("2026-W44")
+    direct = bedrock_digest.random.Random(int.from_bytes(digest, "big"))
+    assert [seeded.randrange(1_000_000) for _ in range(5)] == [direct.randrange(1_000_000) for _ in range(5)]
+    assert bedrock_digest._rng(7).randrange(1_000_000) == bedrock_digest.random.Random(7).randrange(1_000_000)
 
 
 def test_shortlist_order_is_shuffled_and_repeatable_for_a_week():
