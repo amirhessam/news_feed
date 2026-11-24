@@ -31,6 +31,12 @@ MAX_PDF_BYTES = 50 * 1024 * 1024
 MAX_API_BYTES = 10 * 1024 * 1024
 # The arXiv API sometimes answers a valid query with an empty page.
 PAGE_ATTEMPTS = 3
+# Monday morning the API often answers 429. Retrying at the normal 3-second
+# pace keeps the client over the limit, so rate limits wait longer and get
+# more tries. The waits stay well inside the 15-minute Lambda limit.
+RATE_LIMIT_ATTEMPTS = 6
+RATE_LIMIT_WAITS = (20, 40, 80, 120, 120)
+RATE_LIMIT_MAX_WAIT = 180
 ALLOWED_PDF_HOSTS = {"arxiv.org", "export.arxiv.org", "www.arxiv.org"}
 _VERSION = re.compile(r"v\d+$")
 # New-style ids such as 2510.12345 and old-style ids such as hep-th/9901001,
@@ -141,7 +147,9 @@ def fetch_recent_papers(
         size = min(page_size, max_papers - start_index)
         page = None
         problem = "empty page"
-        for attempt in range(1, PAGE_ATTEMPTS + 1):
+        failures = 0
+        rate_limits = 0
+        while failures < PAGE_ATTEMPTS and rate_limits < RATE_LIMIT_ATTEMPTS:
             if stop():
                 break
             if requests:
@@ -157,21 +165,38 @@ def fetch_recent_papers(
                     contact_email,
                     opener,
                 )
-            except RuntimeError as exc:
+            except ArxivRateLimit as exc:
+                rate_limits += 1
                 problem = str(exc)
-                logger.warning("arXiv request at %s failed (attempt %s): %s", start_index, attempt, exc)
+                logger.warning(
+                    "arXiv request at %s was rate limited (attempt %s)",
+                    start_index,
+                    rate_limits,
+                )
+                page = None
+                if rate_limits >= RATE_LIMIT_ATTEMPTS:
+                    break
+                sleep(_rate_limit_wait(exc.retry_after, rate_limits, pause_seconds))
+                continue
+            except RuntimeError as exc:
+                failures += 1
+                problem = str(exc)
+                logger.warning("arXiv request at %s failed (attempt %s): %s", start_index, failures, exc)
+                page = None
                 continue
             if page.entries:
                 break
+            failures += 1
             problem = "empty page"
-            logger.warning("arXiv returned an empty page at %s (attempt %s)", start_index, attempt)
+            logger.warning("arXiv returned an empty page at %s (attempt %s)", start_index, failures)
             page = None
         if page is None:
             if stop():
                 logger.warning("stopped reading arXiv at %s results to leave time for the digest", start_index)
                 break
             if start_index == 0:
-                raise RuntimeError(f"arXiv returned no results after {PAGE_ATTEMPTS} attempts: {problem}")
+                tries = failures + rate_limits
+                raise RuntimeError(f"arXiv returned no results after {tries} attempts: {problem}")
             logger.warning("arXiv paging stopped early at %s of %s results", start_index, total)
             break
         for paper in page.papers:
@@ -230,6 +255,40 @@ def normalize_arxiv_url(url: str) -> str:
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("PDF URL is not an arXiv address")
     return urllib.parse.urlunparse(parsed._replace(scheme="https"))
+
+
+class ArxivRateLimit(RuntimeError):
+    """arXiv answered 429 Too Many Requests."""
+
+    def __init__(self, retry_after: float | None):
+        super().__init__("arXiv API request failed: HTTP Error 429")
+        self.retry_after = retry_after
+
+
+def _retry_after(headers) -> float | None:
+    """Return a Retry-After delay in seconds, when the header is a number."""
+    if not headers:
+        return None
+    raw = headers.get("Retry-After")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except ValueError:
+        return None
+    if seconds < 0:
+        return None
+    return seconds
+
+
+def _rate_limit_wait(retry_after: float | None, rate_limits: int, pause_seconds: float) -> float:
+    """How long to wait after a 429, never longer than RATE_LIMIT_MAX_WAIT."""
+    if retry_after is None:
+        index = min(max(rate_limits, 1) - 1, len(RATE_LIMIT_WAITS) - 1)
+        wait = float(RATE_LIMIT_WAITS[index])
+    else:
+        wait = retry_after
+    return min(max(wait, pause_seconds), RATE_LIMIT_MAX_WAIT)
 
 
 class _ArxivRedirect(urllib.request.HTTPRedirectHandler):
@@ -305,6 +364,14 @@ def _fetch_page(categories, start, end, start_index, page_size, contact_email, o
     try:
         with opener(request, timeout=60) as response:
             payload = response.read(MAX_API_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        # HTTPError is a URLError, so it has to be handled before that case.
+        try:
+            if exc.code == 429:
+                raise ArxivRateLimit(_retry_after(exc.headers)) from exc
+            raise RuntimeError(f"arXiv API request failed: {exc}") from exc
+        finally:
+            exc.close()
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise RuntimeError(f"arXiv API request failed: {exc}") from exc
     if len(payload) > MAX_API_BYTES:

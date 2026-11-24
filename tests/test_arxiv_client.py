@@ -183,6 +183,42 @@ def test_an_empty_page_is_retried_before_the_results_are_trusted():
     assert sleeps == [3]
 
 
+def _too_many_requests(retry_after: str | None = None) -> urllib.error.HTTPError:
+    from email.message import EmailMessage
+
+    headers = EmailMessage()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        "https://export.arxiv.org/api/query",
+        429,
+        "Too Many Requests",
+        headers,
+        None,
+    )
+
+
+def test_a_rate_limit_waits_and_then_reads_the_page():
+    good = _atom([_entry("2510.20001v1", "2026-10-27T00:00:00Z", "Recent")], total=1)
+    requested = []
+    sleeps = []
+    papers = _fetch(
+        _paged({0: [_too_many_requests(), _too_many_requests("7"), good]}, requested),
+        sleeps,
+        pause_seconds=0,
+    )
+    assert [paper.title for paper in papers] == ["Recent"]
+    assert len(requested) == 3
+    assert sleeps == [20, 0, 7, 0]
+
+
+def test_repeated_rate_limits_fail_the_week():
+    requested = []
+    with pytest.raises(RuntimeError, match="429"):
+        _fetch(_paged({0: [_too_many_requests()]}, requested), pause_seconds=0)
+    assert len(requested) == 6
+
+
 def test_a_week_with_no_readable_page_raises_instead_of_returning_nothing():
     requested = []
     with pytest.raises(RuntimeError, match="no results"):
